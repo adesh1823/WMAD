@@ -179,7 +179,7 @@ export default function ConsultationPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             query: currentQuery,
-            session_id: userId,
+            user_id: userId,
           }),
           signal: abortControllerRef.current.signal,
         }),
