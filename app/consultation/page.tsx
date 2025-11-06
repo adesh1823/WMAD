@@ -22,10 +22,11 @@ import {
 } from "lucide-react"
 
 // --- API Endpoints ---
-const API_BASE_URL = "https://aravsaxena884-consult.hf.space";
+const API_BASE_URL = "https://aravsaxena884-consult.hf.space"
 
 const CONSULTATION_URL = `${API_BASE_URL}/legal-consultation`
 const HISTORY_URL = `${API_BASE_URL}/get-session-history`
+const DELETE_SESSION_URL = `${API_BASE_URL}/delete-session` // <-- 1. ADDED THIS
 
 // --- Types ---
 type Message = {
@@ -46,6 +47,12 @@ type Session = {
 type ConsultationResponse = {
   response: string // This is the JSON string of {consultation: "...", key_terms: "..."}
   history: string[] // This is just a list of content strings, not used for loading
+}
+
+// Type for the parsed AI response content
+type AiResponseContent = {
+  consultation: string
+  key_terms: string
 }
 
 // Type for the response from /get-session-history
@@ -102,7 +109,7 @@ export default function ConsultationPage() {
       console.error("Failed to load from localStorage:", err)
       handleNewChat()
     }
-  }, [])
+  }, []) // Empty dependency array ensures this runs only once on mount
 
   // Save session list to localStorage whenever it changes
   useEffect(() => {
@@ -141,69 +148,95 @@ export default function ConsultationPage() {
     }
   }
 
-  const loadSession = useCallback(async (sessionId: string) => {
-    if (isTypingActive) return
-    if (sessionId === currentSessionId && messages.length > 0) return // Already loaded
+  const loadSession = useCallback(
+    async (sessionId: string) => {
+      if (isTypingActive) return
+      if (sessionId === currentSessionId && messages.length > 0) return // Already loaded
 
-    setActiveSession(sessionId)
-    setMessages([])
-    setError(null)
-    setLoading(true)
+      setActiveSession(sessionId)
+      setMessages([])
+      setError(null)
+      setLoading(true)
 
-    try {
-      const response = await fetch(`${HISTORY_URL}/${sessionId}`)
-      if (!response.ok) {
-        throw new Error("Failed to fetch history")
+      try {
+        const response = await fetch(`${HISTORY_URL}/${sessionId}`)
+        if (!response.ok) {
+          throw new Error("Failed to fetch history")
+        }
+        const data: HistoryResponse = await response.json()
+
+        // Convert backend history format to frontend Message format
+        const loadedMessages: Message[] = data.history.map((msg) => {
+          let content = msg.data.content
+          // AI messages are saved as JSON strings, user messages are plain text
+          if (msg.type === "ai") {
+            try {
+              // Try to parse the content as JSON
+              const aiContent: AiResponseContent = JSON.parse(msg.data.content)
+              content = aiContent.consultation
+            } catch (e) {
+              // If it fails (e.g., old message format), just use the raw content
+              content = msg.data.content
+            }
+          }
+
+          return {
+            id: uuidv4(),
+            type: msg.type === "human" ? "user" : "ai",
+            content: content,
+            timestamp: new Date(),
+            displayedContent: content,
+          }
+        })
+
+        setMessages(loadedMessages)
+      } catch (err) {
+        console.error("Failed to load session:", err)
+        setError("Failed to load chat history. Please try again.")
+        // If loading fails, create a new chat to avoid being stuck
+        if (sessionList.length === 0) {
+          handleNewChat()
+        }
+      } finally {
+        setLoading(false)
       }
-      const data: HistoryResponse = await response.json()
+    },
+    [currentSessionId, isTypingActive, messages.length, sessionList.length],
+  )
 
-      // Convert backend history format to frontend Message format
-      const loadedMessages: Message[] = data.history.map((msg) => ({
-        id: uuidv4(),
-        type: msg.type === "human" ? "user" : "ai",
-        // The backend /legal-consultation saves the *stringified JSON* as the AI message
-        // The user message is saved as plain text.
-        content:
-          msg.type === "ai"
-            ? JSON.parse(msg.data.content).consultation
-            : msg.data.content,
-        timestamp: new Date(),
-        displayedContent:
-          msg.type === "ai"
-            ? JSON.parse(msg.data.content).consultation
-            : msg.data.content,
-      }))
-
-      setMessages(loadedMessages)
-    } catch (err) {
-      console.error("Failed to load session:", err)
-      setError("Failed to load chat history. Please try again.")
-      // If loading fails, create a new chat to avoid being stuck
-      if (sessionList.length === 0) {
-        handleNewChat()
-      }
-    } finally {
-      setLoading(false)
-    }
-  }, [currentSessionId, isTypingActive, messages.length, sessionList.length])
-
-  const handleDeleteSession = (
+  // --- 2. UPDATED THIS FUNCTION ---
+  const handleDeleteSession = async (
     e: React.MouseEvent,
     sessionIdToDelete: string,
   ) => {
     e.stopPropagation() // Prevent click from loading the session
 
-    setSessionList((prev) => prev.filter((s) => s.id !== sessionIdToDelete))
+    // Optimistic UI update: Remove from list immediately
+    const remainingSessions = sessionList.filter(
+      (s) => s.id !== sessionIdToDelete,
+    )
+    setSessionList(remainingSessions)
 
+    // Handle UI logic for switching sessions
     if (currentSessionId === sessionIdToDelete) {
-      const remainingSessions = sessionList.filter(
-        (s) => s.id !== sessionIdToDelete,
-      )
       if (remainingSessions.length > 0) {
         loadSession(remainingSessions[0].id)
       } else {
         handleNewChat()
       }
+    }
+
+    // Call backend to delete from database
+    try {
+      await fetch(`${DELETE_SESSION_URL}/${sessionIdToDelete}`, {
+        method: "DELETE",
+      })
+      // Log success
+      console.log("Session deleted from database:", sessionIdToDelete)
+    } catch (err) {
+      console.warn("Failed to delete session from database:", err)
+      // Note: We don't re-add it to the list.
+      // The user's primary action (deleting from their view) is complete.
     }
   }
 
@@ -325,9 +358,9 @@ export default function ConsultationPage() {
 
       const data: ConsultationResponse = await response.json()
 
-      // The 'response' field from the backend is a *stringified JSON*
-      // We need to parse it to get the actual consultation text
-      const parsedAiResponse = JSON.parse(data.response)
+      // The 'response' field from the backend is now a valid JSON string
+      // We parse it to get the actual consultation text
+      const parsedAiResponse: AiResponseContent = JSON.parse(data.response)
       const consultationText =
         parsedAiResponse.consultation || "I'm not sure how to respond to that."
 
@@ -344,7 +377,12 @@ export default function ConsultationPage() {
       simulateTyping(aiMessage.id, consultationText)
     } catch (err) {
       if (err instanceof Error && err.name !== "AbortError") {
-        setError(err.message || "Failed to get response. Please try again.")
+        let errorMsg = err.message || "Failed to get response. Please try again."
+        if (errorMsg.includes("is not valid JSON")) {
+          errorMsg =
+            "Received an invalid response from the server. Please try again."
+        }
+        setError(errorMsg)
       }
     } finally {
       setLoading(false)
@@ -356,6 +394,7 @@ export default function ConsultationPage() {
     currentSessionId,
     messages.length,
     simulateTyping,
+    loadSession, // Added loadSession to dependencies
   ])
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
