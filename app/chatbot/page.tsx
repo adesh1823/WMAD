@@ -50,6 +50,11 @@ interface ChatResponse {
   }
 }
 
+interface ErrorResponse {
+  detail?: string
+  message?: string
+}
+
 const API_BASE_URL = "https://aravsaxena884-trueRAG.hf.space"
 
 const ChatbotPage: React.FC = () => {
@@ -133,8 +138,8 @@ const ChatbotPage: React.FC = () => {
       ])
       setPdfUrl("")
     } catch (err) {
-      const error = err as AxiosError
-      setError(error.response?.data?.detail || "Failed to upload PDF")
+      const error = err as AxiosError<ErrorResponse>
+      setError(error.response?.data?.detail || error.response?.data?.message || "Failed to upload PDF")
     } finally {
       setIsLoading(false)
     }
@@ -206,8 +211,8 @@ const ChatbotPage: React.FC = () => {
         setMessages((prev) => [...prev, botMessage])
       }
     } catch (err) {
-      const error = err as AxiosError
-      setError(error.response?.data?.detail || "Failed to get response")
+      const error = err as AxiosError<ErrorResponse>
+      setError(error.response?.data?.detail || error.response?.data?.message || "Failed to get response")
 
       const errorMessage: ChatMessage = {
         id: crypto.randomUUID(),
